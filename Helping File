@@ -1,0 +1,127 @@
+#First of all create 2 folders in local directory by name
+
+1) output
+2) temp_work
+
+#Event chains pipeline Stage
+
+The event extraction pipeline is implemented by the scripts in bin/event_pipeline/. The basic steps leading up to event extraction are performed by the pipeline script. The ultimate aim is to produce what we refer to as "rich docs". 
+
+Individual stages of the pipeline are run using the pipeline.sh script. The first step is to edit 
+bin/event_pipeline/config/local (follow comments there). Then create a pipeline config file: see 
+bin/event_pipeline/config/gigaword-nyt for an example. Each stage of the pipeline can be called with:
+
+./pipeline.sh config/gigaword <stage-number>
+
+#Example
+./pipeline.sh gigaword-nyt 1
+
+
+Each stage takes a long time to run and is parallelized, according to the config setting. You'll want to run the 
+following stages:
+
+  1  Plain text extraction  
+  2  Text tokenization      
+  3  Parse with OpenNLP     
+  4  Parse with C&C         
+  5  Coreference resolution 
+
+#Rich Document Generation Stage
+
+
+#Build Documents (Execute Command in bin Terminal)
+
+./run_py -m cam.whim.entity_narrative.chains.build_docs /home/waseem/waseem/old_work/input_data/ /home/waseem/waseem/old_work/output/
+gigaword-nyt/coref/ /home/waseem/waseem/old_work/output/gigaword-nyt/candc/deps/ /home/waseem/waseem/old_work/output/gigaword-nyt/candc/tags/ /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_raw/ --tarred
+
+# Result is not tarred. Tar each year: (Execute on Local Terminal)
+cd /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_raw/1994
+find . -name "*.txt" | sed -e 's/^\.\///' | tar -cf nyt_$year.tar --files-from -
+rm *.txt
+
+# Splitting years into months: (Execute Command in bin)
+./run_py -m whim_common.data.retar_gigaword /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_raw/ /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_raw_months/
+
+# Index building:  (Execute Command in bin)             
+./run_py -m cam.whim.entity_narrative.chains.build_index /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_raw_months/ --tarred
+
+# Analyse index: (Execute Command in bin)
+# You may want to decide on the basis of the output of this step how rare a predicate needs to be to be filtered out
+./run_py -m cam.whim.entity_narrative.chains.filter_rare_events stats /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_raw_months/verbs.tar.index
+
+
+# Filter very rare predicates (those with <100 occurrences): (Execute Command in bin) 
+./run_py -m cam.whim.entity_narrative.chains.filter_rare_events filter /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_raw_months/verbs.tar.index 100 /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_filtered/
+
+# Split sets: (Execute Command in bin)
+# This gives you training, dev and test sets
+./run_py -m whim_common.data.split_sets \
+    /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_filtered/ \
+    /home/waseem/waseem/old_work/output/gigaword/sets/gigaword_dev.txt \
+    /home/waseem/waseem/old_work/output/gigaword/sets/gigaword_test.txt \
+    /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_filtered_sets/
+
+
+# Build index for filtered set: (Execute Command in bin)
+./run_py -m cam.whim.entity_narrative.chains.build_index /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_filtered_sets/training/ --tarred
+./run_py -m cam.whim.entity_narrative.chains.build_index /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_filtered_sets/test/ --tarred
+./run_py -m cam.whim.entity_narrative.chains.build_index /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs_filtered_sets/dev/ --tarred
+
+
+
+# Rearrange directories (Execute on Local Terminal)
+cd /home/waseem/waseem/old_work/output/gigaword-nyt
+mkdir rich_docs
+mv rich_docs_filtered_sets/* rich_docs/
+rmdir rich_docs_filtered_sets
+mv rich_docs_filtered rich_docs/all
+mv rich_docs_raw_months rich_docs/unfiltered
+rm -rf rich_docs_raw
+
+
+# Make some smaller training sets (Execute on Local Terminal)
+cd rich_docs
+mkdir small_training
+cp training/nyt_* small_training/
+mkdir medium_training
+cp training/nyt_* medium_training/
+#Indexes for the tars should get generated the first time you use them for training/eval.
+
+
+# Build stop-predicate list (Execute Command in bin)
+# Count predicates:
+./run_py -m cam.whim.entity_narrative.chains.count_predicates /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs/small_training/ --tarred
+# Output stats about counts:
+./run_py -m cam.whim.entity_narrative.chains.stoplist stats /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs/small_training/predicate_counts
+# Decide on N and create stoplist:
+./run_py -m cam.whim.entity_narrative.chains.stoplist build /home/waseem/waseem/old_work/output/gigaword-nyt/rich_docs/small_training/predicate_counts 10
+
+
+#Training models Stage
+
+
+Models are trained using the script bin/entity_narrative/train/train_config.sh, together with config files in the 
+config/ subdirectory. If you have the dataset prepared as above, it should be reasonably straightforward to run the 
+model training by modifying the config files that are there so they use the right dataset directory. Use the following command
+
+./train_config.sh config/Model_Type/Model_Name
+
+#Example
+./train_config.sh config/proposed_model/gigaword-full
+
+
+#Evaluation Stage
+
+Before evaluating, need to generate a test sample.  The script bin/entity_narrative/eval/experiments/generate_sample.sh, with appropriate modification of paths, can be used to do this for the dev set and test set.
+
+After that, you can evaluate a model using the script bin/entity_narrative/eval/experiments/multiple_choice.sh (again, 
+you'll need to modify the paths). Use the following Command
+
+./multiple_choice.sh Model_Type Model_Name
+
+#Example
+
+./multiple_choice.sh proposed-model gigaword-full
+
+
+
